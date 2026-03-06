@@ -26,6 +26,8 @@ export const TOPIC_ITEM = ".item"
 // Schedule
 export const SCHEDULE_SWITCH = ".post-time-wrapper .d-switch"
 export const DATE_PICKER_INPUT = ".date-picker-container input"
+export const DATE_PICKER_CONTENT =
+  ".date-picker-container .d-datepicker-content"
 
 // Actions
 export const PUBLISH_BTN = ".publish-page-publish-btn button.bg-red"

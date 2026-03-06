@@ -61,8 +61,14 @@ bun install
 | `content` | string | 是 | 笔记正文 |
 | `images` | string[] | 是 | 图片文件绝对路径（至少 1 张） |
 | `tags` | string[] | 否 | 话题标签（最多 10 个） |
-| `schedule_at` | string | 否 | 定时发布时间，ISO 8601 格式（1 小时 ~ 14 天内） |
+| `schedule_at` | string | 否 | 定时发布时间，ISO 8601 格式（1 小时 ~ 14 天内），页面输入格式为 `YYYY-MM-DD HH:mm` |
 | `attachments` | string[] | 否 | 附件文件绝对路径 |
+
+### 定时发布
+
+传入 `schedule_at` 参数即可定时发布。工具会自动打开定时开关，将 ISO 8601 时间转为 `YYYY-MM-DD HH:mm` 格式填入日期选择器，然后点击发布。发布后笔记会出现在创作者中心的「定时发布」列表中。
+
+> 注意：定时时间必须在 1 小时 ~ 14 天之间，超出范围会报错。
 
 ## 技术栈
 

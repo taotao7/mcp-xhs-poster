@@ -15,6 +15,7 @@ import {
   TOPIC_ITEM,
   SCHEDULE_SWITCH,
   DATE_PICKER_INPUT,
+  DATE_PICKER_CONTENT,
   PUBLISH_BTN,
   POPOVER,
   FILE_RELATION_CONTAINER,
@@ -341,13 +342,9 @@ async function setSchedule(page: Page, isoDate: string): Promise<void> {
   const toggle = await page.waitForSelector(SCHEDULE_SWITCH, { timeout: 5000 })
   if (!toggle) throw new Error("Schedule switch not found")
   await toggle.click()
-  await delay(500)
+  await delay(1000)
 
-  const dateInput = await page.waitForSelector(DATE_PICKER_INPUT, {
-    timeout: 5000,
-  })
-  if (!dateInput) throw new Error("Date picker input not found")
-
+  // Format as YYYY-MM-DD HH:mm
   const d = new Date(isoDate)
   const formatted = [
     d.getFullYear(),
@@ -361,7 +358,21 @@ async function setSchedule(page: Page, isoDate: string): Promise<void> {
     String(d.getMinutes()).padStart(2, "0"),
   ].join("")
 
+  // Click the datepicker content area to activate the input
+  const pickerContent = await page.$(DATE_PICKER_CONTENT)
+  if (pickerContent) {
+    await pickerContent.click()
+    await delay(500)
+  }
+
+  const dateInput = await page.waitForSelector(DATE_PICKER_INPUT, {
+    timeout: 5000,
+  })
+  if (!dateInput) throw new Error("Date picker input not found")
+
+  // Triple-click to select all existing text, then type the new value
   await dateInput.click({ clickCount: 3 })
+  await delay(200)
   await dateInput.type(formatted, { delay: 30 })
   await page.keyboard.press("Enter")
   await delay(500)
