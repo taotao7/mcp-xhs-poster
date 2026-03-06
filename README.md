@@ -2,7 +2,7 @@
 
 小红书 MCP Server —— 通过 MCP 协议实现小红书的登录、发布图文笔记、管理会话。
 
-基于 Puppeteer 浏览器自动化，支持扫码登录、图片上传、话题标签、定时发布、附件上传等功能。
+基于 Puppeteer 浏览器自动化，支持扫码登录、图片上传、话题标签、定时发布、附件上传、R2 图床等功能。
 
 ## 功能
 
@@ -11,6 +11,7 @@
 | `check_login_status` | 检查当前 Cookie 是否为有效的登录状态 |
 | `get_login_qrcode` | 生成登录二维码，等待扫码（最长 4 分钟） |
 | `publish_content` | 发布图文笔记（支持标题、正文、图片、标签、定时、附件） |
+| `upload_image` | 上传本地图片到 Cloudflare R2，返回公开 URL |
 | `delete_cookies` | 删除已保存的 Cookie，重置登录状态 |
 
 ## 安装
@@ -33,7 +34,12 @@ bun install
       "args": ["run", "/path/to/mcp-xhs-poster/src/index.ts"],
       "env": {
         "XHS_HEADLESS": "true",
-        "XHS_COOKIES_PATH": "~/.media-mcp/xhs-cookies.json"
+        "XHS_COOKIES_PATH": "~/.media-mcp/xhs-cookies.json",
+        "R2_ACCOUNT_ID": "your-account-id",
+        "R2_ACCESS_KEY_ID": "your-access-key",
+        "R2_SECRET_ACCESS_KEY": "your-secret-key",
+        "R2_BUCKET_NAME": "your-bucket",
+        "R2_PUBLIC_URL": "https://img.example.com"
       }
     }
   }
@@ -46,6 +52,11 @@ bun install
 |------|--------|------|
 | `XHS_HEADLESS` | `true` | 设为 `false` 可显示浏览器窗口（调试用） |
 | `XHS_COOKIES_PATH` | `~/.media-mcp/xhs-cookies.json` | Cookie 存储路径 |
+| `R2_ACCOUNT_ID` | — | Cloudflare 账户 ID |
+| `R2_ACCESS_KEY_ID` | — | R2 API Token Access Key |
+| `R2_SECRET_ACCESS_KEY` | — | R2 API Token Secret Key |
+| `R2_BUCKET_NAME` | — | R2 存储桶名称 |
+| `R2_PUBLIC_URL` | — | R2 存储桶的公开访问域名（如 `https://img.example.com`） |
 
 ## 使用流程
 
@@ -70,12 +81,19 @@ bun install
 
 > 注意：定时时间必须在 1 小时 ~ 14 天之间，超出范围会报错。
 
+### 图片上传（R2 图床）
+
+调用 `upload_image` 将本地图片上传到 Cloudflare R2 对象存储，返回公开 URL。适用于 Markdown 内容中需要引用网络图片的场景 — 先上传获取 URL，再嵌入到内容中。
+
+需要配置 R2 相关的环境变量（见上方环境变量表）。
+
 ## 技术栈
 
 - TypeScript + Bun
 - Puppeteer + Stealth Plugin（反检测）
 - MCP SDK (`@modelcontextprotocol/sdk`)
 - Zod（参数校验）
+- AWS SDK S3（Cloudflare R2 兼容）
 
 ## License
 

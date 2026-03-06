@@ -8,6 +8,7 @@ import { deleteCookies, getCookiePath } from "./cookies.js"
 import { checkLoginStatus, fetchQrcode, waitForLogin } from "./login.js"
 import { publishContent } from "./publish.js"
 import { qrcodeToCleanPng } from "./qrcode.js"
+import { uploadToR2 } from "./r2.js"
 
 const { server, connect } = createMcpServer({
   name: "mcp-xhs-poster",
@@ -168,6 +169,28 @@ server.tool(
       return errorResult(`Publish failed: ${String(error)}`)
     } finally {
       await managed.close()
+    }
+  },
+)
+
+// ── upload_image ────────────────────────────────────────────────────
+
+server.tool(
+  "upload_image",
+  "Upload a local image to Cloudflare R2 and return its public URL. Use this when markdown content needs to reference images — upload first, then use the returned URL.",
+  {
+    file_path: z.string().describe("Absolute path to the local image file"),
+  },
+  async ({ file_path }): Promise<CallToolResult> => {
+    try {
+      const url = await uploadToR2(file_path)
+      return {
+        content: [
+          { type: "text", text: url },
+        ],
+      }
+    } catch (error) {
+      return errorResult(`Image upload failed: ${String(error)}`)
     }
   },
 )
