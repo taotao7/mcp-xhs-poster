@@ -7,6 +7,7 @@ import { launchBrowser } from "./browser.js"
 import { deleteCookies, getCookiePath, listAccounts } from "./cookies.js"
 import { checkLoginStatus, fetchQrcode, waitForLogin } from "./login.js"
 import { publishContent } from "./publish.js"
+import { listNotes, deleteNote, getEditUrl } from "./manage.js"
 import { qrcodeToCleanPng } from "./qrcode.js"
 import { uploadToR2 } from "./r2.js"
 
@@ -23,7 +24,7 @@ const { server, connect } = createMcpServer({
   name: "mcp-xhs-poster",
   version: "0.1.0",
   description:
-    "Xiaohongshu poster — login, publish image posts, manage cookies. Supports multiple accounts.",
+    "Xiaohongshu poster — login, publish, edit, delete posts, manage cookies. Supports multiple accounts.",
 })
 
 // ── list_accounts ─────────────────────────────────────────────────
@@ -135,7 +136,6 @@ server.tool(
         // fall back to original image
       }
 
-      // Save clean version if available
       if (cleanBase64) {
         writeFileSync(qrPath, Buffer.from(cleanBase64, "base64"))
       }
@@ -156,6 +156,129 @@ server.tool(
     } catch (error) {
       await managed.close()
       return errorResult(`QR code fetch failed: ${String(error)}`)
+    }
+  },
+)
+
+// ── list_notes ───────────────────────────────────────────────────────
+
+server.tool(
+  "list_notes",
+  "List published notes from the Xiaohongshu creator platform. Returns note IDs, titles, stats, etc.",
+  {
+    account: accountParam,
+    page: z
+      .number()
+      .optional()
+      .describe("Page number (0-indexed). Defaults to 0."),
+  },
+  async ({ account, page: pageNum }): Promise<CallToolResult> => {
+    const acct = account || DEFAULT_ACCOUNT
+    const managed = await launchBrowser(acct)
+    try {
+      const notes = await listNotes(managed.page, pageNum ?? 0)
+      await managed.saveCookies()
+
+      if (notes.length === 0) {
+        return {
+          content: [{ type: "text", text: `No notes found (account: ${acct}).` }],
+        }
+      }
+
+      const lines = notes.map(
+        (n, i) =>
+          `${i + 1}. [${n.id}] ${n.title}\n` +
+          `   ${n.time} | views: ${n.views} likes: ${n.likes} collects: ${n.collects} comments: ${n.comments} shares: ${n.shares}` +
+          (n.sticky ? " [置顶]" : ""),
+      )
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Notes for account '${acct}' (${notes.length}):\n\n${lines.join("\n\n")}`,
+          },
+        ],
+      }
+    } catch (error) {
+      return errorResult(`List notes failed: ${String(error)}`)
+    } finally {
+      await managed.close()
+    }
+  },
+)
+
+// ── delete_note ──────────────────────────────────────────────────────
+
+server.tool(
+  "delete_note",
+  "Delete a published note from Xiaohongshu. Use list_notes to get the note ID first. This action is irreversible.",
+  {
+    account: accountParam,
+    note_id: z.string().describe("The note ID to delete (from list_notes)"),
+  },
+  async ({ account, note_id }): Promise<CallToolResult> => {
+    const acct = account || DEFAULT_ACCOUNT
+    const managed = await launchBrowser(acct)
+    try {
+      await deleteNote(managed.page, note_id)
+      await managed.saveCookies()
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Note ${note_id} deleted successfully (account: ${acct}).`,
+          },
+        ],
+      }
+    } catch (error) {
+      return errorResult(`Delete note failed: ${String(error)}`)
+    } finally {
+      await managed.close()
+    }
+  },
+)
+
+// ── edit_note ────────────────────────────────────────────────────────
+
+server.tool(
+  "edit_note",
+  "Edit an existing note on Xiaohongshu. Navigates to the edit page and updates the specified fields. Only provided fields will be updated; omitted fields keep their current values.",
+  {
+    account: accountParam,
+    note_id: z.string().describe("The note ID to edit (from list_notes)"),
+    title: z.string().optional().describe("New title (leave empty to keep current)"),
+    content: z.string().optional().describe("New body text (leave empty to keep current)"),
+    images: z
+      .array(z.string())
+      .optional()
+      .describe("New image paths. WARNING: replaces all existing images."),
+    tags: z
+      .array(z.string())
+      .max(10)
+      .optional()
+      .describe("New hashtags (max 10). Appended after content."),
+  },
+  async ({ account, note_id, title, content, images, tags }): Promise<CallToolResult> => {
+    const acct = account || DEFAULT_ACCOUNT
+    const managed = await launchBrowser(acct)
+    try {
+      await editNote(managed.page, note_id, { title, content, images, tags })
+      await managed.saveCookies()
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Note ${note_id} updated successfully (account: ${acct}).`,
+          },
+        ],
+      }
+    } catch (error) {
+      console.error("[edit] ERROR — keeping browser open 30s for inspection")
+      await new Promise((r) => setTimeout(r, 30_000))
+      return errorResult(`Edit note failed: ${String(error)}`)
+    } finally {
+      await managed.close()
     }
   },
 )
@@ -278,6 +401,232 @@ server.tool(
     }
   },
 )
+
+// ── edit note implementation ────────────────────────────────────────
+
+import type { Page } from "puppeteer"
+import type { ElementHandle } from "puppeteer"
+import {
+  UPLOAD_CONTENT_AREA,
+  TITLE_INPUT,
+  TITLE_MAX_SUFFIX,
+  CONTENT_EDITOR,
+  CONTENT_LENGTH_ERROR,
+  TOPIC_CONTAINER,
+  TOPIC_ITEM,
+  PUBLISH_BTN,
+  POPOVER,
+  UPLOAD_INPUT,
+  IMG_PREVIEW,
+} from "./selectors.js"
+
+interface EditParams {
+  title?: string
+  content?: string
+  images?: string[]
+  tags?: string[]
+}
+
+async function editNote(
+  page: Page,
+  noteId: string,
+  params: EditParams,
+): Promise<void> {
+  const editUrl = getEditUrl(noteId)
+  console.error(`[edit] navigating to ${editUrl}`)
+  await page.goto(editUrl, { waitUntil: "networkidle2", timeout: 30_000 })
+  await delay(5000)
+
+  if (page.url().includes("login")) {
+    throw new Error("Not logged in to creator platform.")
+  }
+
+  // Wait for the page to load
+  console.error("[edit] waiting for publish page to load...")
+  await page.waitForSelector(TITLE_INPUT, { timeout: 15_000 })
+
+  // Update title if provided
+  if (params.title) {
+    console.error("[edit] updating title...")
+    const titleInput = await page.$(TITLE_INPUT)
+    if (titleInput) {
+      await titleInput.click({ clickCount: 3 })
+      await delay(100)
+      await page.keyboard.press("Backspace")
+      await titleInput.type(params.title, { delay: 30 })
+      await delay(500)
+
+      const tooLong = await page.$(TITLE_MAX_SUFFIX)
+      if (tooLong) {
+        throw new Error("Title exceeds maximum length")
+      }
+    }
+  }
+
+  // Update content if provided
+  if (params.content) {
+    console.error("[edit] updating content...")
+    const editor = await page.$(CONTENT_EDITOR)
+    if (editor) {
+      // Select all existing content and replace
+      await editor.click()
+      await page.keyboard.down("Meta")
+      await page.keyboard.press("a")
+      await page.keyboard.up("Meta")
+      await delay(100)
+      await page.keyboard.press("Backspace")
+      await delay(300)
+      await page.keyboard.type(params.content, { delay: 10 })
+      await delay(500)
+
+      const tooLong = await page.$(CONTENT_LENGTH_ERROR)
+      if (tooLong) {
+        throw new Error("Content exceeds maximum length")
+      }
+    }
+  }
+
+  // Add tags if provided (appended after content)
+  if (params.tags && params.tags.length > 0) {
+    console.error("[edit] adding tags...")
+    // Move to end of content
+    const editor = await page.$(CONTENT_EDITOR)
+    if (editor) {
+      await editor.click()
+      for (let i = 0; i < 20; i++) {
+        await page.keyboard.press("ArrowDown")
+      }
+      await page.keyboard.press("Enter")
+      await page.keyboard.press("Enter")
+      await delay(300)
+
+      for (const tag of params.tags.slice(0, 10)) {
+        await page.keyboard.type(`#${tag}`, { delay: 30 })
+        await delay(1000)
+
+        try {
+          await page.waitForSelector(`${TOPIC_CONTAINER} ${TOPIC_ITEM}`, {
+            timeout: 5000,
+          })
+          const item = await page.$(`${TOPIC_CONTAINER} ${TOPIC_ITEM}`)
+          if (item) {
+            await item.click()
+          }
+        } catch {
+          // Topic suggestion didn't appear
+        }
+        await delay(500)
+      }
+    }
+  }
+
+  // Replace images if provided
+  // Strategy: upload new images first, then delete old ones (XHS requires at least 1 image)
+  if (params.images && params.images.length > 0) {
+    console.error("[edit] replacing images...")
+
+    const oldCount = await page.$$eval(".img-preview-area .pr", (els) => els.length)
+    console.error(`[edit] existing images: ${oldCount}`)
+
+    // Step 1: Upload all new images
+    for (let i = 0; i < params.images.length; i++) {
+      const input = await page.$('input[type="file"][accept*="jpg"]') as ElementHandle<HTMLInputElement> | null
+      if (!input) throw new Error(`Upload file input not found (index ${i})`)
+      console.error(`[edit] uploading image ${i + 1}/${params.images.length}: ${params.images[i]}`)
+      await input.uploadFile(params.images[i])
+      // Wait for preview count to increase
+      const expectedCount = oldCount + i + 1
+      const deadline = Date.now() + 60_000
+      while (Date.now() < deadline) {
+        const count = await page.$$eval(".img-preview-area .pr", (els) => els.length)
+        if (count >= expectedCount) break
+        await delay(500)
+      }
+    }
+    console.error("[edit] new images uploaded")
+
+    // Step 2: Delete old images (they are at the front of the list)
+    for (let i = 0; i < oldCount; i++) {
+      console.error(`[edit] removing old image ${i + 1}/${oldCount}...`)
+      // Always delete the first .pr (old images are at the front)
+      const firstPr = await page.$(".img-preview-area .pr")
+      if (!firstPr) break
+
+      // Hover to reveal close button
+      const box = await firstPr.boundingBox()
+      if (box) {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        await delay(500)
+      }
+
+      // Click close button
+      const closeBtn = await firstPr.$(".close-btn")
+      if (closeBtn) {
+        // Force visible and click
+        await page.evaluate((btn) => {
+          const el = btn as HTMLElement
+          el.style.cssText = "display:flex !important; opacity:1 !important; visibility:visible !important;"
+        }, closeBtn)
+        await delay(200)
+        await closeBtn.click()
+      } else {
+        // Fallback: force show + click at coords
+        await page.evaluate(() => {
+          const btn = document.querySelector(".img-preview-area .pr:first-child .close-btn") as HTMLElement
+          if (btn) {
+            btn.style.cssText = "display:flex !important; opacity:1 !important; visibility:visible !important;"
+            btn.click()
+          }
+        })
+      }
+      await delay(1000)
+    }
+
+    const finalCount = await page.$$eval(".img-preview-area .pr", (els) => els.length)
+    console.error(`[edit] final image count: ${finalCount}`)
+  }
+
+  // Click publish/save button
+  console.error("[edit] clicking save/publish button...")
+  await dismissPopover(page)
+
+  const btn = await page.$(PUBLISH_BTN)
+  if (btn) {
+    await btn.evaluate((el) => (el as HTMLElement).click())
+  } else {
+    // Fallback: find button with "发布" or "保存" text
+    const clicked = await page.evaluate(() => {
+      const buttons = document.querySelectorAll("button")
+      for (const b of buttons) {
+        const text = b.textContent || ""
+        if ((text.includes("发布") || text.includes("保存")) && !b.disabled) {
+          b.click()
+          return true
+        }
+      }
+      return false
+    })
+    if (!clicked) throw new Error("Publish/save button not found")
+  }
+
+  await delay(3000)
+  console.error("[edit] done!")
+}
+
+async function dismissPopover(page: Page): Promise<void> {
+  const popover = await page.$(POPOVER)
+  if (popover) {
+    await page.evaluate(
+      (sel) => document.querySelector(sel)?.remove(),
+      POPOVER,
+    )
+    await delay(300)
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 // ── helpers ──────────────────────────────────────────────────────────
 

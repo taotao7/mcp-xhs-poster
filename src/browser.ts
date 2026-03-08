@@ -30,8 +30,10 @@ export async function launchBrowser(account: string): Promise<ManagedBrowser> {
   return {
     page,
     saveCookies: async () => {
-      const current = await page.cookies();
-      await saveCookies(current, account);
+      // Use CDP to get ALL cookies across all domains (not just current page)
+      const client = await page.createCDPSession();
+      const { cookies: allCookies } = await client.send("Network.getAllCookies");
+      await saveCookies(allCookies as CookieParam[], account);
     },
     close: async () => {
       await page.close().catch(() => {});

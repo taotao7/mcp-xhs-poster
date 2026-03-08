@@ -38,3 +38,14 @@ export const FILE_RELATION_INPUT = '.file-relation-container input[type="file"]'
 
 // Overlays
 export const POPOVER = "div.d-popover"
+
+// Note manager page
+export const NOTE_ITEM = ".d-tabs-pane .note"
+export const NOTE_TITLE = ".info .title"
+export const NOTE_EDIT_BTN = "span.control.data-edit"
+export const NOTE_DELETE_BTN = "span.control.data-del"
+export const NOTE_TOP_BTN = "span.control.data-top"
+
+// Delete confirmation dialog
+export const DELETE_CONFIRM_BTN = ".d-modal__footer .d-button--theme-primary"
+export const DELETE_CANCEL_BTN = ".d-modal__footer .d-button--theme-default"
